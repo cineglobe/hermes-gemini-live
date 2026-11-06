@@ -675,6 +675,7 @@ test('notices show the news, not the instructions for the voice', () => {
   const { glNoticeShown } = loadEngine()
   assert.equal(glNoticeShown('[Hermes update] The user approved that request. Acknowledge it in a few words.'), 'The user approved that request.')
   assert.equal(glNoticeShown("[Hermes update] Hermes needs the user's approval before it can do this: rm x. Say in one plain sentence what it wants to do and ask them to decide. You cannot approve it yourself."), "Hermes needs the user's approval before it can do this: rm x.")
+  assert.equal(glNoticeShown('[Hermes update] About your request “x”: Hermes replied: What should it say? Tell the user what that says, and only that. Say something was done only if it says so. If it asks a question, ask the user, then send their reply with ask_hermes, where last_task.'), 'About your request “x”: Hermes replied: What should it say?')
 })
 
 test('a voice message cannot answer an approval, and ending the call clears it', async () => {

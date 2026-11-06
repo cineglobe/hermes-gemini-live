@@ -63,7 +63,7 @@ const GL_DENY = /^\W*(?:no,?\s+)?(?:deny|denied|reject)(?:\s+(?:it|that))?\W*$/i
 function glNoticeShown(text) {
   return text
     .replace(/\[Hermes update\]\s*/g, '')
-    .replace(/\s*(?:Tell the user the outcome briefly in your own words\.|Acknowledge it in a few words\.|Say so briefly if the user is still deciding\.|Say in one plain sentence what it wants to do[^\n]*)/g, '')
+    .replace(/\s*(?:Tell the user what that says, and only that\. Say something was done only if it says so\. If it asks a question, ask the user, then send their reply with ask_hermes, where last_task\.|Acknowledge it in a few words\.|Say so briefly if the user is still deciding\.|Say in one plain sentence what it wants to do[^\n]*)/g, '')
 }
 
 const GL_APPROVAL_WORDS = /\b(?:approv\w*|den(?:y|ies|ied)|reject\w*|allow\w*|go ahead|yes|confirm\w*)\b/i
@@ -1943,9 +1943,9 @@ function createGeminiLiveEngine(env) {
       : failed
         ? `${state.agentName} hit a problem: ${glClip(payload.error || payload.failure_reason || text || 'unknown error', 400)}`
         : text
-          ? `${state.agentName} finished. Its answer: ${d.result}`
+          ? `${state.agentName} replied: ${d.result}`
           : `${state.agentName} finished without a written answer.`
-    queueNotice(`[Hermes update] About your request “${what}”: ${outcome} Tell the user the outcome briefly in your own words.`)
+    queueNotice(`[Hermes update] About your request “${what}”: ${outcome} Tell the user what that says, and only that. Say something was done only if it says so. If it asks a question, ask the user, then send their reply with ask_hermes, where last_task.`)
   }
 
   // ── client tools ─────────────────────────────────────────────────────────────────────────────
@@ -2246,7 +2246,7 @@ function createGeminiLiveEngine(env) {
       const sessionId = args.thread_id ? await liveIdFor(args.thread_id) : job && job.sessionId
 
       if (!sessionId) {
-        return { error: args.thread_id ? 'That thread is not running in this app, so it cannot be messaged from here.' : 'Hermes is not working on anything for this call, so there is nothing to steer.' }
+        return { error: args.thread_id ? 'That thread is not running in this app, so it cannot be messaged from here.' : 'Nothing was sent, because Hermes is not working on anything for this call. For a follow-up to its last answer, call ask_hermes with where last_task.' }
       }
       if (!message) {
         return { error: 'message is empty' }

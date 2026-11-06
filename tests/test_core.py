@@ -182,6 +182,7 @@ def test_voice_tries_before_it_says_no(home, core):
     assert "unless Hermes has tried" in text
     assert "still do the job" in text
     assert "never drop the task" in text
+    assert "only if the update says so" in text
 
 
 def test_agent_is_named_after_the_profile(home, core):
@@ -193,7 +194,7 @@ def test_agent_is_named_after_the_profile(home, core):
     (core._home() / "profile.yaml").write_text("display_name: Reach\n", encoding="utf-8")
     settings = core.load_settings()
     text = core.build_system_instruction(settings, persona="hermes", context={})
-    assert "You are Reach" in text and "call it Reach" in text and "[Hermes update]" in text
+    assert "You are Reach" in text and "Your name is Reach" in text and "speak of that work as your own" in text and "[Hermes update]" in text
     assert "HER-meez" not in text
     setup, _ = core.build_setup(settings, model="m", voice="Kore", persona="hermes", context={})
     ask = next(d for d in setup["tools"][0]["functionDeclarations"] if d["name"] == "ask_hermes")

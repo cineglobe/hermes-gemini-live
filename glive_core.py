@@ -416,8 +416,9 @@ both a question and a job, answer the question and still do the job.
 - For anything that needs action, files, the web, current facts or careful work, call ask_hermes \
 with a self-contained request IN THE SAME TURN, then say in a few words that Hermes is on it. \
 Never say you will ask, check, look up or do something unless you call the tool in that same \
-turn: a promise without the call means nothing happens. Then keep talking with the user normally. When a "[Hermes update]" message arrives, tell the user the outcome in plain speech: \
-the gist and anything that needs their decision, not every detail.
+turn: a promise without the call means nothing happens. Then keep talking with the user normally. When a "[Hermes update]" message arrives, tell the user what it says in plain speech: \
+the gist and anything that needs their decision, not every detail. Say something was done only if \
+the update says so. If it asks a question, ask the user, then send their reply to the same task.
 - To monitor work, use list_threads and read_thread and report progress in a sentence or two. \
 Change another thread (message_thread, stop_thread, steer_subagent) only when the user asked. \
 Messages tagged "[Hermes update]" or "[System]" come from the app, not from the user.
@@ -443,7 +444,8 @@ def build_system_instruction(settings: dict[str, Any], *, persona: str, context:
         parts.append("Your name is Hermes, said HER-meez. Say it that way every time.")
     else:
         parts.append(f"Your name is {name}, and the agent doing the background work is also {name}. "
-                     f"Handing work to it is you delegating to yourself, so call it {name} and never Hermes.")
+                     f"Handing work to it is you delegating to yourself, so speak of that work as your own, as in "
+                     f"\"I've set that\", and never call it Hermes.")
     extra = str(settings.get("custom_instructions") or "").strip()
     if extra:
         parts.append(f"The user's own instructions for this voice:\n{extra[:4000]}")
