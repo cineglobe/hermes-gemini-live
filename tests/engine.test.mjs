@@ -730,6 +730,22 @@ test('the voice chooses a new session or the last task', async () => {
   await t.engine.stop()
 })
 
+test('a new session gets the request alone, a follow-up keeps the call transcript', async () => {
+  const gateway = fakeGateway()
+  const t = makeEngine({ gateway })
+  await t.engine.start({})
+  await tick(5)
+  const { state, CLIENT_TOOLS } = t.engine._test
+  state.transcript.push({ role: 'user', text: 'set an alarm' })
+  const sent = () => gateway.calls.filter(c => c.method === 'prompt.submit').at(-1).params
+  await CLIENT_TOOLS.ask_hermes({ request: 'search memory', where: 'new' }, {})
+  assert.equal(sent().voice_context, '')
+  state.delegation.status = 'done'
+  await CLIENT_TOOLS.ask_hermes({ request: 'now shorten that', where: 'last_task' }, {})
+  assert.match(sent().voice_context, /set an alarm/)
+  await t.engine.stop()
+})
+
 test('glPlain strips markdown for speech', () => {
   const { glPlain } = loadEngine()
   assert.equal(glPlain('## Done\n- **one** `two`\n[link](http://x)'), 'Done • one two link')

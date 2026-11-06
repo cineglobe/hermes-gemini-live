@@ -1745,10 +1745,10 @@
       }
       const created = await env.rpc('session.create', {}, 30000).catch(() => null)
 
-      return created && created.session_id ? { sessionId: created.session_id, viaComposer: false } : resolveTarget()
+      return created && created.session_id ? { sessionId: created.session_id, viaComposer: false, fresh: true } : resolveTarget()
     }
 
-    async function submitToHermes(sessionId, text, viaComposer) {
+    async function submitToHermes(sessionId, text, viaComposer, fresh) {
       if (viaComposer && env.submitToChat && env.submitToChat(sessionId || null, text)) {
         return sessionId || (await waitForFocusedSession())
       }
@@ -1757,7 +1757,8 @@
         throw new Error('Open a chat first, then ask again.')
       }
 
-      const context = await voiceContext()
+      // A new session stands on its own request; the call's transcript would also become its title.
+      const context = fresh ? '' : await voiceContext()
       await env.rpc('prompt.submit', { session_id: sessionId, text, surface: 'voice-live', voice_context: context }, 30000)
 
       return sessionId
@@ -2212,7 +2213,7 @@
           }
         }
 
-        const sessionId = await submitToHermes(target.sessionId, request, target.viaComposer)
+        const sessionId = await submitToHermes(target.sessionId, request, target.viaComposer, target.fresh)
         const delegation = { id: `d${(seq += 1)}`, request, sessionId, status: 'working', lastTool: '', partial: '', result: '', startedAt: glNow(), toolCount: 0 }
         set({ delegation })
 
