@@ -177,6 +177,13 @@ def test_session_can_drop_search_after_a_quota_close(home, core, monkeypatch):
 
 
 
+def test_voice_tries_before_it_says_no(home, core):
+    text = core.build_system_instruction(core.load_settings(), persona="hermes", context={})
+    assert "unless Hermes has tried" in text
+    assert "still do the job" in text
+    assert "never drop the task" in text
+
+
 def test_agent_is_named_after_the_profile(home, core):
     assert core.agent_name() == "Hermes"
     (core._home() / "profile.yaml").write_text("description: marketing\ndisplay_name: 'Reach'\n", encoding="utf-8")
