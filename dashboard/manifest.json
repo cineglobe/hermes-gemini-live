@@ -1,0 +1,11 @@
+{
+  "name": "gemini-live",
+  "label": "Gemini Live",
+  "description": "Full-duplex Gemini Live voice calls with your Hermes agent.",
+  "icon": "Activity",
+  "version": "1.0.0",
+  "tab": { "path": "/gemini-live", "position": "after:chat" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

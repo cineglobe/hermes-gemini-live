@@ -1,0 +1,375 @@
+diff --git a/apps/desktop/src/app/chat/composer/contrib.ts b/apps/desktop/src/app/chat/composer/contrib.ts
+index 2437b0ab98..193c4c6f36 100644
+--- a/apps/desktop/src/app/chat/composer/contrib.ts
++++ b/apps/desktop/src/app/chat/composer/contrib.ts
+@@ -14,6 +14,7 @@
+  *                             composer.attachments   (ComposerAttachmentProvider)
+  *                             composer.microActions  (ComposerMicroActionProvider)
+  *                             composer.contextMenu   (ComposerContextMenuProvider)
++ *                             composer.voiceEngines  (ComposerVoiceEngine)
+  *
+  * Core keeps ownership of the transcript, input, and submit engine — these
+  * seams AUGMENT the composer, they never replace it. Middleware runs as an
+@@ -40,7 +41,8 @@ export const COMPOSER_AREAS = {
+   microActions: 'composer.microActions',
+   atCompletions: 'composer.atCompletions',
+   modelPill: 'composer.modelPill',
+-  contextMenu: 'composer.contextMenu'
++  contextMenu: 'composer.contextMenu',
++  voiceEngines: 'composer.voiceEngines'
+ } as const
+ 
+ /** What a `composer.contextMenu` provider sees when the user right-clicks the
+@@ -263,3 +265,69 @@ export function useComposerModelPillLabel({
+     return null
+   }, [contributions, compact, model, reasoningEffort])
+ }
++
++/** Payload of a `composer.voiceEngines` data contribution: a voice-conversation engine a plugin
++ *  ships (its own realtime model, its own call UI). It is listed in the composer's voice-engine
++ *  picker after the core engines; when the user picks it, the start-voice button calls `start`
++ *  instead of mounting a core engine. The plugin owns everything after `start` — the call, its
++ *  surface, its credentials. Every field is a standing compatibility promise. */
++export interface ComposerVoiceEngine {
++  /** Row label in the picker, e.g. "Gemini Live (full-duplex, delegates to Hermes)". */
++  label: string
++  /** Short name for the start button's tooltip, e.g. "Gemini Live". */
++  shortLabel: string
++  /** Optional muted second line under the label (a requirement, a hint). */
++  detail?: string
++  /** Start a conversation. Called from the start-voice button's click. */
++  start: () => void
++}
++
++/** A registered voice engine with its contribution id (the picker's identity for it). */
++export interface RegisteredVoiceEngine extends ComposerVoiceEngine {
++  id: string
++}
++
++function asVoiceEngine(id: string, data: unknown): null | RegisteredVoiceEngine {
++  const engine = data as Partial<ComposerVoiceEngine> | undefined
++
++  if (!engine || typeof engine.start !== 'function') {
++    return null
++  }
++
++  const label = typeof engine.label === 'string' ? engine.label.trim() : ''
++  const shortLabel = typeof engine.shortLabel === 'string' ? engine.shortLabel.trim() : ''
++
++  if (!label || !shortLabel) {
++    return null
++  }
++
++  return {
++    detail: typeof engine.detail === 'string' && engine.detail.trim() ? engine.detail.trim() : undefined,
++    id,
++    label,
++    shortLabel,
++    start: engine.start
++  }
++}
++
++/** Plugin voice engines in registry order. Malformed payloads are dropped, so a broken plugin
++ *  can neither blank the picker nor offer a row that does nothing. */
++export function voiceEnginesFrom(contributions: readonly { data?: unknown; id: string }[]): RegisteredVoiceEngine[] {
++  const engines: RegisteredVoiceEngine[] = []
++
++  for (const contribution of contributions) {
++    const engine = asVoiceEngine(contribution.id, contribution.data)
++
++    if (engine && !engines.some(e => e.id === engine.id)) {
++      engines.push(engine)
++    }
++  }
++
++  return engines
++}
++
++export function useComposerVoiceEngines(): RegisteredVoiceEngine[] {
++  const contributions = useContributions(COMPOSER_AREAS.voiceEngines)
++
++  return useMemo(() => voiceEnginesFrom(contributions), [contributions])
++}
+diff --git a/apps/desktop/src/app/chat/composer/controls.tsx b/apps/desktop/src/app/chat/composer/controls.tsx
+index d89867d303..22be66ef3b 100644
+--- a/apps/desktop/src/app/chat/composer/controls.tsx
++++ b/apps/desktop/src/app/chat/composer/controls.tsx
+@@ -18,6 +18,7 @@ import { ModelPill } from './model-pill'
+ import { ReasoningPill } from './reasoning-pill'
+ import { StartVoiceButton } from './start-voice-button'
+ import type { ChatBarState, VoiceStatus } from './types'
++import { useVoiceStart } from './voice-engine-rows'
+ import { VoiceFan } from './voice-fan'
+ import { VoiceMenu } from './voice-menu'
+ 
+@@ -89,6 +90,8 @@ export function ComposerControls({
+   const { t } = useI18n()
+   const c = t.composer
+   const hudMode = useStore($hudMode)
++  // A plugin voice engine chosen in the picker takes the start press (composer.voiceEngines).
++  const startVoice = useVoiceStart(conversation.onStart)
+ 
+   if (conversation.active) {
+     return <ConversationPill {...conversation} disabled={disabled} />
+@@ -117,7 +120,7 @@ export function ComposerControls({
+       autoSpeak={autoSpeak}
+       disabled={disabled}
+       onDictate={onDictate}
+-      onStartConversation={conversation.onStart}
++      onStartConversation={startVoice}
+       onToggleAutoSpeak={onToggleAutoSpeak}
+       state={state}
+       voiceStatus={voiceStatus}
+@@ -172,7 +175,7 @@ export function ComposerControls({
+         </Tip>
+       ) : null}
+       {showVoicePrimary ? (
+-        <StartVoiceButton disabled={disabled} label={c.startVoice} onStart={conversation.onStart} />
++        <StartVoiceButton disabled={disabled} label={c.startVoice} onStart={startVoice} />
+       ) : (
+         <Tip
+           label={
+diff --git a/apps/desktop/src/app/chat/composer/voice-engine-rows.tsx b/apps/desktop/src/app/chat/composer/voice-engine-rows.tsx
+index 3282ec8ec7..bcd5ce04e2 100644
+--- a/apps/desktop/src/app/chat/composer/voice-engine-rows.tsx
++++ b/apps/desktop/src/app/chat/composer/voice-engine-rows.tsx
+@@ -9,8 +9,44 @@ import {
+ import { useI18n } from '@/i18n'
+ import { triggerHaptic } from '@/lib/haptics'
+ import { notifyError } from '@/store/notifications'
++import {
++  $pluginVoiceEngineChoice,
++  choosePluginVoiceEngine,
++  resolvePluginVoiceEngine
++} from '@/store/plugin-voice-engine'
+ import { $voiceLiveStatus, selectedVoiceChatMode, setVoiceChatMode } from '@/store/voice-live'
+ 
++import { type RegisteredVoiceEngine, useComposerVoiceEngines } from './contrib'
++
++const PLUGIN_PREFIX = 'plugin:'
++
++/** The plugin engine the start button runs right now, or null for the core engine. */
++export function useSelectedPluginVoiceEngine(): null | RegisteredVoiceEngine {
++  const engines = useComposerVoiceEngines()
++  const choice = useStore($pluginVoiceEngineChoice)
++
++  return resolvePluginVoiceEngine(engines, choice)
++}
++
++/** The start-voice action: the chosen plugin engine's `start`, else the core engine's. A plugin
++ *  that throws must not swallow the click, so the core engine starts instead. */
++export function useVoiceStart(coreStart: () => void): () => void {
++  const plugin = useSelectedPluginVoiceEngine()
++
++  if (!plugin) {
++    return coreStart
++  }
++
++  return () => {
++    try {
++      plugin.start()
++    } catch (error) {
++      notifyError(error, plugin.shortLabel)
++      coreStart()
++    }
++  }
++}
++
+ /**
+  * Which engine the next voice conversation mounts: the chained
+  * speech-to-text → Hermes → speech loop, or GPT-Live delegating to Hermes.
+@@ -20,12 +56,16 @@ import { $voiceLiveStatus, selectedVoiceChatMode, setVoiceChatMode } from '@/sto
+  * whichever menu the layout has room for (the folded voice menu, or the
+  * right-click menu on the start button), so the same rows appear in both.
+  * Hidden while the backend has not answered or predates the mode, so we never
+- * offer a switch the gateway would refuse with 4002.
++ * offer a switch the gateway would refuse with 4002. Plugin engines
++ * (`composer.voiceEngines`) follow the core rows; picking one is a
++ * renderer-side choice, picking a core row clears it.
+  */
+ export function VoiceEngineRows({ disabled }: { disabled: boolean }) {
+   const { t } = useI18n()
+   const c = t.composer
+   const status = useStore($voiceLiveStatus)
++  const engines = useComposerVoiceEngines()
++  const plugin = useSelectedPluginVoiceEngine()
+ 
+   if (status === null) {
+     return null
+@@ -38,14 +78,22 @@ export function VoiceEngineRows({ disabled }: { disabled: boolean }) {
+       <DropdownMenuLabel>{c.voiceEngine}</DropdownMenuLabel>
+       <DropdownMenuRadioGroup
+         onValueChange={value => {
++          if (value.startsWith(PLUGIN_PREFIX)) {
++            triggerHaptic('open')
++            choosePluginVoiceEngine(value.slice(PLUGIN_PREFIX.length))
++
++            return
++          }
++
+           if (value !== 'chained' && value !== 'gpt-live') {
+             return
+           }
+ 
+           triggerHaptic('open')
++          choosePluginVoiceEngine(null)
+           setVoiceChatMode(value).catch(error => notifyError(error, c.voiceEngineChangeFailed))
+         }}
+-        value={selectedVoiceChatMode(status)}
++        value={plugin ? `${PLUGIN_PREFIX}${plugin.id}` : selectedVoiceChatMode(status)}
+       >
+         <DropdownMenuRadioItem className={dropdownMenuRow} disabled={disabled} value="chained">
+           {c.voiceEngineChained}
+@@ -60,6 +108,19 @@ export function VoiceEngineRows({ disabled }: { disabled: boolean }) {
+             )}
+           </span>
+         </DropdownMenuRadioItem>
++        {engines.map(engine => (
++          <DropdownMenuRadioItem
++            className={dropdownMenuRow}
++            disabled={disabled}
++            key={engine.id}
++            value={`${PLUGIN_PREFIX}${engine.id}`}
++          >
++            <span className="flex min-w-0 flex-col">
++              <span>{engine.label}</span>
++              {engine.detail ? <span className="text-muted-foreground truncate text-xs">{engine.detail}</span> : null}
++            </span>
++          </DropdownMenuRadioItem>
++        ))}
+       </DropdownMenuRadioGroup>
+     </>
+   )
+@@ -69,11 +130,16 @@ export function VoiceEngineRows({ disabled }: { disabled: boolean }) {
+ export function useVoiceEngineName(): null | string {
+   const { t } = useI18n()
+   const status = useStore($voiceLiveStatus)
++  const plugin = useSelectedPluginVoiceEngine()
+ 
+   if (status === null) {
+     return null
+   }
+ 
++  if (plugin) {
++    return plugin.shortLabel
++  }
++
+   return selectedVoiceChatMode(status) === 'gpt-live'
+     ? t.composer.voiceEngineLiveShort
+     : t.composer.voiceEngineChainedShort
+diff --git a/apps/desktop/src/app/chat/composer/voice-engines.test.ts b/apps/desktop/src/app/chat/composer/voice-engines.test.ts
+new file mode 100644
+index 0000000000..4373621a0a
+--- /dev/null
++++ b/apps/desktop/src/app/chat/composer/voice-engines.test.ts
+@@ -0,0 +1,41 @@
++import { describe, expect, it } from 'vitest'
++
++import {
++  $pluginVoiceEngineChoice,
++  choosePluginVoiceEngine,
++  resolvePluginVoiceEngine
++} from '@/store/plugin-voice-engine'
++
++import { voiceEnginesFrom } from './contrib'
++
++const start = () => undefined
++
++describe('composer.voiceEngines', () => {
++  it('keeps well-formed engines in registry order and drops malformed or duplicate payloads', () => {
++    const engines = voiceEnginesFrom([
++      { data: { label: 'Gemini Live', shortLabel: 'Gemini', start }, id: 'gemini-live.engine' },
++      { data: { label: 'No start', shortLabel: 'x' }, id: 'broken.a' },
++      { data: { label: '  ', shortLabel: 'x', start }, id: 'broken.b' },
++      { data: null, id: 'broken.c' },
++      { data: { label: 'Dup', shortLabel: 'Dup', start }, id: 'gemini-live.engine' },
++      { data: { detail: '  needs a key ', label: 'Other', shortLabel: 'O', start }, id: 'other.engine' }
++    ])
++
++    expect(engines.map(e => e.id)).toEqual(['gemini-live.engine', 'other.engine'])
++    expect(engines[1].detail).toBe('needs a key')
++  })
++
++  it('a choice is per scope, survives only while its engine is registered, and clears back to core', () => {
++    const engines = voiceEnginesFrom([{ data: { label: 'Gemini Live', shortLabel: 'Gemini', start }, id: 'g' }])
++
++    choosePluginVoiceEngine('g', 'conn::alice')
++    expect(resolvePluginVoiceEngine(engines, $pluginVoiceEngineChoice.get(), 'conn::alice')?.id).toBe('g')
++    // another profile on the same connection is untouched
++    expect(resolvePluginVoiceEngine(engines, $pluginVoiceEngineChoice.get(), 'conn::bob')).toBeNull()
++    // plugin uninstalled: the button falls back to the core engine
++    expect(resolvePluginVoiceEngine([], $pluginVoiceEngineChoice.get(), 'conn::alice')).toBeNull()
++
++    choosePluginVoiceEngine(null, 'conn::alice')
++    expect($pluginVoiceEngineChoice.get()).toEqual({})
++  })
++})
+diff --git a/apps/desktop/src/sdk/index.ts b/apps/desktop/src/sdk/index.ts
+index 19e7dc97ef..f47b01e9f3 100644
+--- a/apps/desktop/src/sdk/index.ts
++++ b/apps/desktop/src/sdk/index.ts
+@@ -1572,7 +1572,8 @@ export {
+   type ComposerContextMenuProvider,
+   type ComposerMiddleware,
+   type ComposerModelPillContext,
+-  type ComposerModelPillProvider
++  type ComposerModelPillProvider,
++  type ComposerVoiceEngine
+ } from '@/app/chat/composer/contrib'
+ /** The main composer's surface pieces, so a plugin composer (Bot Mode rooms) reads as the
+  *  same input: the ring, the fill layer behind the editor, and the ghost / primary icon buttons. */
+diff --git a/apps/desktop/src/store/plugin-voice-engine.ts b/apps/desktop/src/store/plugin-voice-engine.ts
+new file mode 100644
+index 0000000000..d540fcadbe
+--- /dev/null
++++ b/apps/desktop/src/store/plugin-voice-engine.ts
+@@ -0,0 +1,49 @@
++import { backendScopeKey } from '@hermes/shared'
++
++import type { RegisteredVoiceEngine } from '@/app/chat/composer/contrib'
++import { persistentAtom } from '@/lib/persisted'
++import { activeGatewayConnectionId, activeGatewayProfileKey } from '@/store/gateway'
++
++/**
++ * Which PLUGIN voice engine the start-voice button runs, per (connection, profile).
++ *
++ * The core engines (`chained`, `gpt-live`) are `voice.voice_chat_mode` on the backend, which
++ * refuses any other value; a plugin engine is a renderer-side choice layered on top. While one is
++ * chosen and still registered it wins; choosing a core engine clears it. Scoped by the same key as
++ * the voice-live status so one profile's choice never leaks into another's composer.
++ */
++export const $pluginVoiceEngineChoice = persistentAtom<Record<string, string>>('hermes.desktop.pluginVoiceEngine', {})
++
++function scopeKey(): string {
++  return backendScopeKey(activeGatewayConnectionId(), activeGatewayProfileKey())
++}
++
++/** The chosen engine if it is still registered; an uninstalled plugin falls back to core. */
++export function resolvePluginVoiceEngine(
++  engines: readonly RegisteredVoiceEngine[],
++  choice: Readonly<Record<string, string>>,
++  scope: string = scopeKey()
++): null | RegisteredVoiceEngine {
++  const id = choice[scope]
++
++  return id ? (engines.find(engine => engine.id === id) ?? null) : null
++}
++
++/** Pick a plugin engine for this scope, or `null` to hand the button back to the core engine. */
++export function choosePluginVoiceEngine(id: null | string, scope: string = scopeKey()): void {
++  const current = $pluginVoiceEngineChoice.get()
++
++  if ((current[scope] ?? null) === id) {
++    return
++  }
++
++  const next = { ...current }
++
++  if (id) {
++    next[scope] = id
++  } else {
++    delete next[scope]
++  }
++
++  $pluginVoiceEngineChoice.set(next)
++}

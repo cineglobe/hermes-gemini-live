@@ -1,0 +1,96 @@
+name: gemini-live
+version: 1.0.0
+manifest_version: 2
+api_version: 1
+description: "Full-duplex Gemini Live voice calls for Hermes: talk to your agent, delegate work, monitor and steer threads and bot chats, recall memory. Bring your own Gemini API key."
+author: cineglobe
+license: MIT
+homepage: https://github.com/cineglobe/hermes-gemini-live
+kind: standalone
+requires_hermes: ">=0.22.5"
+tags: [voice, gemini, realtime, desktop, dashboard]
+platforms:
+  - linux
+  - macos
+  - windows
+provides_tools: []
+provides_hooks: []
+requires_env: []
+config_schema:
+  api_key:
+    type: secret
+    env: GEMINI_LIVE_API_KEY
+    label: "Gemini API key"
+    description: "From aistudio.google.com/apikey. Optional if GEMINI_API_KEY or GOOGLE_API_KEY is already set for this profile."
+  model:
+    type: str
+    default: gemini-3.8-live
+    label: "Live model"
+    description: "Any Gemini Live model id your key can use (gemini-3.8-live, gemini-3.8-live-extended-thinking, gemini-2.5-flash-native-audio-latest, ...). The call screen lists them."
+  voice:
+    type: str
+    default: Laomedeia
+    label: "Voice"
+    choices: [Puck, Kore, Charon, Fenrir, Aoede, Leda, Orus, Zephyr, Callirrhoe, Autonoe, Enceladus, Iapetus, Umbriel, Algieba, Despina, Erinome, Algenib, Rasalgethi, Laomedeia, Achernar, Alnilam, Schedar, Gacrux, Pulcherrima, Achird, Zubenelgenubi, Vindemiatrix, Sadachbia, Sadaltager, Sulafat]
+  persona:
+    type: str
+    default: hermes
+    label: "Persona"
+    description: "Speaking style at the start of a call. Custom personas can be picked during the call."
+    choices: [hermes, concise, coach, briefing]
+  custom_instructions:
+    type: str
+    default: ""
+    label: "Extra instructions"
+    description: "Added to the voice's instructions on every call (name to call you, tone, language)."
+  custom_personas:
+    type: dict
+    default: {}
+    label: "Custom personas"
+    description: "Name → speaking-style instructions, e.g. {\"pirate\": \"Talk like a friendly pirate.\"}."
+  google_search:
+    type: bool
+    default: true
+    label: "Google Search grounding"
+    description: "Let the voice look up quick facts itself with Google Search."
+  thread_control:
+    type: bool
+    default: true
+    label: "Thread monitoring and steering"
+    description: "Let the voice list and read your threads and bot chats, steer or stop them when you ask."
+  system_checks:
+    type: bool
+    default: false
+    label: "Read-only system checks"
+    description: "Let the voice read time, uptime, load, memory, disk, OS, top processes and git status directly. Fixed commands only; nothing you say reaches a command line."
+  mcp_tools:
+    type: bool
+    default: true
+    label: "MCP tools"
+    description: "Tell the voice which MCP servers and tools this profile has and let it use them. Each use runs as a one-tool Hermes turn, so Hermes' MCP trust, credentials and approvals apply."
+  readonly_shell:
+    type: bool
+    default: false
+    label: "Read-only commands"
+    description: "Let the voice run one plain read-only command (df, ps, docker ps, git log, tail a log...) on the Hermes host. Each command must pass hard rules (allow-list, no shell syntax, no sudo, secret paths blocked) AND a safety review by the reviewer model that sees the call; it runs with no inherited secrets, no file writes, a timeout and redacted output."
+  readonly_reviewer_model:
+    type: str
+    default: gemini-3.5-flash-lite
+    label: "Safety reviewer model"
+    description: "Gemini model (your key) that reviews each read-only command against the call. It can only refuse; if it fails, the command is refused."
+  turn_detection:
+    type: str
+    default: balanced
+    label: "Turn taking"
+    description: "patient waits longer before answering; snappy answers sooner."
+    choices: [patient, balanced, snappy]
+  voice_approval:
+    type: bool
+    default: false
+    label: "Approve by voice"
+    description: "When a job needs your approval, let you answer by saying approve or deny. Off means buttons only. Best with headphones. The voice model can never approve anything itself."
+  share_chat_context:
+    type: bool
+    default: true
+    label: "Share the open chat"
+    description: "Give the voice the title and latest messages of the chat on screen when a call starts."
