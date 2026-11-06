@@ -1,5 +1,5 @@
 name: gemini-live
-version: 1.0.0
+version: 1.1.0
 manifest_version: 2
 api_version: 1
 description: "Full-duplex Gemini Live voice calls for Hermes: talk to your agent, delegate work, monitor and steer threads and bot chats, recall memory. Bring your own Gemini API key."
@@ -68,6 +68,11 @@ config_schema:
     default: true
     label: "MCP tools"
     description: "Tell the voice which MCP servers and tools this profile has and let it use them. Each use runs as a one-tool Hermes turn, so Hermes' MCP trust, credentials and approvals apply."
+  phone_tools:
+    type: bool
+    default: true
+    label: "iPhone tools"
+    description: "With hermes-mobile-device-access and a paired iPhone, let the voice set and read alarms, timers and reminders directly, within the access you allowed in the Hermes Agent app."
   readonly_shell:
     type: bool
     default: false

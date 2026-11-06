@@ -20,6 +20,7 @@ The voice takes the name of the profile you start the call from: its display nam
 | Subagents | `list_subagents`, `steer_subagent` | Goal, status and latest output of each subagent; steer one without stopping it. |
 | Your setup | `agents_overview` | Every profile/bot: name, description, **model and provider** (e.g. `openai-codex` = ChatGPT subscription login), skill count, latest bot-chat activity. Never keys or credentials. |
 | MCP | `list_mcp_tools`, `use_mcp_tool` (on by default) | The voice is told which MCP servers and tools this profile has, and can use them. Each use runs as a one-tool Hermes turn, so Hermes' MCP trust, credentials and approvals still apply. |
+| iPhone | `mobile_alarm_create`, `mobile_timer_start`, `mobile_alarms_list`, `mobile_alarm_cancel`, `mobile_reminder_create`, `mobile_reminders_list`, `mobile_reminder_complete`, `mobile_request_result` (on by default) | Alarms, timers and reminders straight from the voice, without a Hermes turn. Needs the `hermes-mobile-device-access` plugin and a paired iPhone, and each tool appears only when the Hermes Agent app has granted that access. The voice says it's done only once the phone confirms. A sleeping phone can take a while or miss the request, and the voice says it's waiting rather than guessing. Everything else on the phone goes through `ask_hermes`. |
 | Memory | `recall_memory`, `search_conversations` | Hermes' built-in memory and session search directly. An external provider (Honcho, Hindsight…) is searched through a Hermes turn, so its credentials stay with Hermes. |
 | The server | `run_readonly` (opt-in), `system_check` (opt-in) | See [Read-only commands](#read-only-commands). |
 | Web | Google Search grounding | Quick facts without a Hermes turn. Can be turned off. |
@@ -57,7 +58,7 @@ say?" directly. A command runs only if **every** layer agrees, and each layer ca
 3. **Contained run.** No shell, a minimal environment (no inherited secrets), no stdin, a 10 s
    timeout, CPU and file-size limits (it cannot write a file), and redacted, capped output.
 
-Anything that changes the machine goes to Hermes (`ask_hermes`) and its normal approval flow.
+Anything that changes the machine goes to Hermes (`ask_hermes`) and its normal approval flow. The iPhone tools are the one direct write the voice has, limited to the phone's alarms, timers and reminders and to what the app allows.
 
 The other routes to Hermes (`ask_hermes`, `message_thread`, `steer_subagent`, `use_mcp_tool`) refuse requests to read or reveal `.env` files, keys, tokens, passwords and credentials, and the voice is told not to offer a way around that. This is a text check on what the voice sends, so treat it as a strong guard rather than a sandbox: Hermes itself keeps its normal file access and approvals.
 
@@ -91,7 +92,7 @@ voice, instructions and tools are locked server-side.
 | `model` | `gemini-3.8-live` | Any Live model your key can use; the call screen lists them. |
 | `voice` / `persona` | `Laomedeia` / `hermes` | Changeable mid-call. |
 | `custom_instructions`, `custom_personas` | — | Your own style rules and personas. |
-| `google_search`, `thread_control`, `share_chat_context`, `mcp_tools` | on | |
+| `google_search`, `thread_control`, `share_chat_context`, `mcp_tools`, `phone_tools` | on | `phone_tools` does nothing without a paired iPhone. |
 | `system_checks`, `readonly_shell` | **off** | Server access is opt-in. |
 | `readonly_reviewer_model` | `gemini-3.5-flash-lite` | The safety reviewer. |
 | `turn_detection` | `balanced` | `patient` / `balanced` / `snappy`. |

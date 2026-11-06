@@ -1185,7 +1185,11 @@
     }
 
     async function mintSession(overrides) {
-      const context = { ...(overrides.context || {}), ...(mcpBrief.length ? { mcp: mcpBrief } : {}) }
+      const context = {
+        ...(overrides.context || {}),
+        ...(mcpBrief.length ? { mcp: mcpBrief } : {}),
+        time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      }
       const response = await env.rest('/session', {
         method: 'POST',
         body: {
@@ -1664,6 +1668,14 @@
       search_conversations: 'Searched past chats',
       system_check: 'System check',
       run_readonly: 'Ran a read-only command',
+      mobile_alarm_create: 'Set an alarm',
+      mobile_timer_start: 'Started a timer',
+      mobile_alarms_list: 'Listed alarms',
+      mobile_alarm_cancel: 'Cancelled an alarm',
+      mobile_reminder_create: 'Created a reminder',
+      mobile_reminders_list: 'Read reminders',
+      mobile_reminder_complete: 'Completed a reminder',
+      mobile_request_result: 'Checked with the phone',
       list_mcp_tools: 'Listed MCP tools',
       use_mcp_tool: 'Used an MCP tool',
       agents_overview: 'Looked at your agents',

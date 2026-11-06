@@ -185,6 +185,69 @@ def test_voice_tries_before_it_says_no(home, core):
     assert "only if the update says so" in text
 
 
+class _FakePhone:
+    def __init__(self, grants=("alarms.manage", "reminders.read", "reminders.write"), result=None):
+        self.grants, self.result, self.calls = list(grants), result or {"status": "succeeded"}, []
+
+    def dispatch(self, name, args):
+        self.calls.append((name, args))
+        if name == "mobile_devices":
+            return json.dumps({"profile": "default", "devices": [{"id": "d1", "grants": self.grants}]})
+        return json.dumps({"id": "r1", "device_id": "d1", "profile": "default", "current_access": {}, **self.result})
+
+
+def _tool_names(core, settings):
+    return {t["declaration"]["name"] for t in core.tool_catalog(settings)}
+
+
+def test_phone_tools_follow_the_grants_on_the_phone(home, core, monkeypatch):
+    settings = core.load_settings()
+    monkeypatch.setattr(core, "_phone_registry", lambda: None)
+    assert not any(n.startswith("mobile_") for n in _tool_names(core, settings))
+
+    monkeypatch.setattr(core, "_phone_registry", lambda: _FakePhone(grants=["alarms.manage"]))
+    names = _tool_names(core, settings)
+    assert {"mobile_alarm_create", "mobile_timer_start", "mobile_request_result"} <= names
+    assert "mobile_reminder_create" not in names
+
+    monkeypatch.setattr(core, "_phone_registry", lambda: _FakePhone(grants=["health.read", "location.read"]))
+    assert not any(n.startswith("mobile_") for n in _tool_names(core, settings))
+
+    monkeypatch.setattr(core, "_phone_registry", lambda: _FakePhone())
+    assert "mobile_reminder_create" in _tool_names(core, settings)
+    assert not any(n.startswith("mobile_") for n in _tool_names(core, {**settings, "phone_tools": False}))
+    setup, routes = core.build_setup(settings, model="m", voice="Kore", persona="hermes", context={"time_zone": "Europe/London"})
+    text = setup["systemInstruction"]["parts"][0]["text"]
+    assert "iPhone is paired" in text and "Europe/London" in text
+    assert {"name": "mobile_alarm_create", "where": "server"} in routes
+
+
+def test_phone_tool_calls_are_limited_and_honest(home, core, monkeypatch):
+    phone = _FakePhone()
+    monkeypatch.setattr(core, "_phone_registry", lambda: phone)
+    out = core.run_server_tool("mobile_alarm_create", {"time": "07:15", "device_id": "other", "surprise": 1})
+    name, sent = phone.calls[-1]
+    assert name == "mobile_alarm_create" and sent["time"] == "07:15"
+    assert "device_id" not in sent and "surprise" not in sent and sent["idempotency_key"]
+    assert out["status"] == "succeeded" and out["request_id"] == "r1"
+    assert "current_access" not in out and "device_id" not in out
+
+    core.run_server_tool("mobile_alarm_create", {"time": "07:15"})
+    assert phone.calls[-1][1]["idempotency_key"] == sent["idempotency_key"]
+
+    phone.result = {"status": "pending"}
+    assert "not done yet" in core.run_server_tool("mobile_timer_start", {"duration_seconds": 60})["note"]
+    phone.result = {"status": "failed", "error": "no grant"}
+    assert "did not happen" in core.run_server_tool("mobile_timer_start", {"duration_seconds": 61})["note"]
+
+    assert "error" in core.run_server_tool("mobile_health_summary", {})
+    assert "error" in core.run_server_tool("mobile_location", {})
+    before = len(phone.calls)
+    monkeypatch.setattr(core, "load_settings", lambda: {"phone_tools": False})
+    assert "error" in core.run_server_tool("mobile_alarm_cancel", {"id": "a"})
+    assert len(phone.calls) == before
+
+
 def test_agent_is_named_after_the_profile(home, core):
     assert core.agent_name() == "Hermes"
     (core._home() / "profile.yaml").write_text("description: marketing\ndisplay_name: 'Reach'\n", encoding="utf-8")

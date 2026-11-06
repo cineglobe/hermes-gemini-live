@@ -33,7 +33,7 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "gemini-live"
-VERSION = "0.1.0"
+VERSION = "1.1.0"
 
 API_ROOT = "https://generativelanguage.googleapis.com"
 # Ephemeral tokens are minted on v1beta and spent on the v1alpha *Constrained* socket (verified).
@@ -100,6 +100,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "system_checks": False,
     "readonly_shell": False,
     "mcp_tools": True,
+    "phone_tools": True,
     "readonly_reviewer_model": "gemini-3.5-flash-lite",
     "turn_detection": "balanced",
     "share_chat_context": True,
@@ -269,6 +270,133 @@ def _fn(name: str, description: str, properties: Optional[dict] = None, required
 _S = {"type": "STRING"}
 
 
+# The voice's direct route to a paired phone, through the hermes-mobile-device-access plugin. Only
+# these tools, each offered only when the phone's grant allows it, and the bridge checks grants again.
+_PHONE_TOOLS: dict[str, dict[str, Any]] = {
+    "mobile_alarm_create": {
+        "grant": "alarms.manage", "write": True, "required": [],
+        "description": "Set one alarm on the user's phone. Use time for a clock time, or at for one exact date and time.",
+        "properties": {
+            "time": {**_S, "description": "24-hour HH:MM on the phone's clock; the next time it comes round."},
+            "at": {**_S, "description": "ISO 8601 date and time with timezone."},
+            "weekdays": {"type": "ARRAY", "items": _S,
+                         "description": "Lowercase day names to repeat on. Only with time."},
+            "label": {**_S, "description": "Short title shown when it rings."}}},
+    "mobile_timer_start": {
+        "grant": "alarms.manage", "write": True, "required": ["duration_seconds"],
+        "description": "Start one countdown timer on the user's phone.",
+        "properties": {"duration_seconds": {"type": "NUMBER", "description": "1 to 86400."},
+                       "label": {**_S, "description": "Short title."}}},
+    "mobile_alarms_list": {
+        "grant": "alarms.manage", "write": False, "required": [], "properties": {},
+        "description": "List the alarms and timers set on the phone through Hermes, with their ids. "
+                       "Alarms made in the Clock app are not visible."},
+    "mobile_alarm_cancel": {
+        "grant": "alarms.manage", "write": True, "required": ["id"],
+        "description": "Cancel one alarm or timer, only when the user asked. Get its id from mobile_alarms_list.",
+        "properties": {"id": _S}},
+    "mobile_reminder_create": {
+        "grant": "reminders.write", "write": True, "required": ["title"],
+        "description": "Create one reminder on the user's phone. Use due for a date and time, due_date for all day.",
+        "properties": {"title": _S, "notes": _S,
+                       "due": {**_S, "description": "ISO 8601 date and time with timezone."},
+                       "due_date": {**_S, "description": "YYYY-MM-DD for an all-day reminder."}}},
+    "mobile_reminders_list": {
+        "grant": "reminders.read", "write": False, "required": [],
+        "description": "Read the user's incomplete reminders, soonest first, with their ids.",
+        "properties": {"query": {**_S, "description": "Text to look for in the title or notes."},
+                       "limit": {"type": "INTEGER", "description": "1 to 20. Default 10."}}},
+    "mobile_reminder_complete": {
+        "grant": "reminders.write", "write": True, "required": ["id"],
+        "description": "Mark one reminder complete, only when the user asked. Get its id from mobile_reminders_list.",
+        "properties": {"id": _S}},
+    "mobile_request_result": {
+        "grant": "", "write": False, "required": ["request_id"],
+        "description": "Check a phone request that was still pending.",
+        "properties": {"request_id": _S}},
+}
+_PHONE_WAIT_SECONDS = 12
+_PHONE_HIDDEN = {"current_access", "access_note", "profile", "device_id", "wake_status", "followup"}
+
+
+def _phone_registry() -> Any:
+    """Hermes' tool registry when the phone plugin's tools are in it, else None."""
+    try:
+        from hermes_cli.plugins import discover_plugins
+        from tools.registry import registry
+        if registry.get_entry("mobile_alarm_create") is None:
+            discover_plugins()
+        return registry if registry.get_entry("mobile_alarm_create") is not None else None
+    except Exception as exc:
+        logger.debug("gemini-live: phone tools unavailable (%s)", type(exc).__name__)
+        return None
+
+
+def phone_grants(settings: dict[str, Any]) -> set[str]:
+    """What the user's paired phones allow this profile. Empty means no direct phone tools."""
+    if not settings.get("phone_tools", True):
+        return set()
+    registry = _phone_registry()
+    if registry is None:
+        return set()
+    try:
+        raw = registry.dispatch("mobile_devices", {})
+        devices = (json.loads(raw) if isinstance(raw, str) else raw).get("devices") or []
+    except Exception as exc:
+        logger.debug("gemini-live: could not read paired phones (%s)", type(exc).__name__)
+        return set()
+    return {str(g) for device in devices if isinstance(device, dict) for g in device.get("grants") or []}
+
+
+def _phone_tools(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    grants = phone_grants(settings)
+    offered = [(n, s) for n, s in _PHONE_TOOLS.items() if s["grant"] in grants]
+    if not offered:
+        return []
+    return [_fn(n, s["description"], s.get("properties"), s["required"], where="server")
+            for n, s in offered] + [_fn("mobile_request_result", _PHONE_TOOLS["mobile_request_result"]["description"],
+                                        _PHONE_TOOLS["mobile_request_result"]["properties"], ["request_id"],
+                                        where="server")]
+
+
+def run_phone_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    spec = _PHONE_TOOLS[name]
+    settings = load_settings()
+    if not settings.get("phone_tools", True):
+        return {"error": "Direct phone tools are turned off."}
+    registry = _phone_registry()
+    if registry is None:
+        return {"error": "No phone is available to this profile."}
+    call = {k: v for k, v in args.items() if k in (spec.get("properties") or {}) and v not in (None, "")}
+    if name == "mobile_reminders_list":
+        call["limit"] = max(1, min(int(call.get("limit") or 10), 20))
+    call["wait_seconds"] = _PHONE_WAIT_SECONDS
+    if name != "mobile_request_result":
+        call["notify_when_ready"] = False
+    if spec["write"]:
+        # The same request repeated within five minutes is one action: a retry must not ring twice.
+        seed = json.dumps([name, call, int(time.time() // 300)], sort_keys=True)
+        call["idempotency_key"] = hashlib.sha256(seed.encode()).hexdigest()[:32]
+    raw = registry.dispatch(name, call)
+    try:
+        result = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except (TypeError, ValueError):
+        return {"error": _clip(raw, 400)}
+    out = {k: v for k, v in result.items() if k not in _PHONE_HIDDEN}
+    if "id" in out:
+        out["request_id"] = out.pop("id")
+    status = out.get("status")
+    if status == "succeeded":
+        out["note"] = "The phone confirmed this."
+    elif status in ("unavailable", "failed", "expired", "cancelled"):
+        out["note"] = "This did not happen. Tell the user why."
+    elif status:
+        out["note"] = ("The phone has not confirmed this, so it is not done yet. Tell the user it is waiting "
+                       "for the phone, then check with mobile_request_result. Do not repeat the request.")
+    text = json.dumps(out, ensure_ascii=False)
+    return out if len(text) <= _MAX_RESULT else {"status": status, "result": _clip(text)}
+
+
 def tool_catalog(settings: dict[str, Any]) -> list[dict[str, Any]]:
     tools = [
         _fn("ask_hermes",
@@ -379,6 +507,7 @@ def tool_catalog(settings: dict[str, Any]) -> list[dict[str, Any]]:
                  "thread_id": {**_S, "description": "Optional thread to run it in."}},
                 ["tool", "goal"]),
         ]
+    tools += _phone_tools(settings)
     tools += [
         _fn("agents_overview",
             "Who is set up in this Hermes: every profile/bot agent with its display name, description, "
@@ -435,7 +564,8 @@ URLs, IDs or code read character by character. If you were cut off, stop and lis
 - The user may speak any language; reply in theirs."""
 
 
-def build_system_instruction(settings: dict[str, Any], *, persona: str, context: dict[str, Any]) -> str:
+def build_system_instruction(settings: dict[str, Any], *, persona: str, context: dict[str, Any],
+                             phone: bool = False) -> str:
     table = personas(settings)
     style = table.get(persona, table["hermes"])["style"]
     name = agent_name()
@@ -446,11 +576,18 @@ def build_system_instruction(settings: dict[str, Any], *, persona: str, context:
         parts.append(f"Your name is {name}, and the agent doing the background work is also {name}. "
                      f"Handing work to it is you delegating to yourself, so speak of that work as your own, as in "
                      f"\"I've set that\", and never call it Hermes.")
+    if phone:
+        parts.append("The user's iPhone is paired. Use your mobile_ tools directly for its alarms, timers and "
+                     "reminders. Say something was done only when the tool's status is succeeded. If it is "
+                     "pending, say you are waiting for the phone. Anything else on the phone goes to ask_hermes.")
     extra = str(settings.get("custom_instructions") or "").strip()
     if extra:
         parts.append(f"The user's own instructions for this voice:\n{extra[:4000]}")
     now = _dt.datetime.now().astimezone()
     parts.append(f"It is {now:%A %d %B %Y, %H:%M} ({now.tzname()}).")
+    zone = str(context.get("time_zone") or "")
+    if re.fullmatch(r"[A-Za-z_]+(?:/[A-Za-z0-9_+\-]+){0,2}", zone):
+        parts.append(f"The user's time zone is {zone}.")
     if settings.get("share_chat_context", True):
         title = str(context.get("chat_title") or "").strip()[:200]
         recent = context.get("recent") or []
@@ -517,7 +654,9 @@ def build_setup(settings: dict[str, Any], *, model: str, voice: str, persona: st
             "responseModalities": ["AUDIO"],
             "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}},
         },
-        "systemInstruction": {"parts": [{"text": build_system_instruction(settings, persona=persona, context=context)}]},
+        "systemInstruction": {"parts": [{"text": build_system_instruction(
+            settings, persona=persona, context=context,
+            phone=any(t["declaration"]["name"] in _PHONE_TOOLS for t in catalog))}]},
         "tools": tools,
         "inputAudioTranscription": {},
         "outputAudioTranscription": {},
@@ -769,10 +908,12 @@ SERVER_TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
 
 def run_server_tool(name: str, args: dict[str, Any], context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     handler = SERVER_TOOLS.get(name)
-    if handler is None:
+    if handler is None and name not in _PHONE_TOOLS:
         return {"error": f"{name} is not a server tool"}
     args = args if isinstance(args, dict) else {}
     try:
+        if name in _PHONE_TOOLS:
+            return run_phone_tool(name, args)
         if name == "run_readonly":
             return handler(args, context if isinstance(context, dict) else None)
         return handler(args)

@@ -14,7 +14,8 @@ This is an independent project, not a fork. `gemini-live-bridge` has no agent to
 
 - **Network:** the client streams microphone audio to `generativelanguage.googleapis.com` on a single-use ephemeral token. The backend calls Google's Gemini API with the key.
 - **Sent to Gemini:** audio, the voice's instructions, tool results and, unless `share_chat_context` is off, the open chat's title and latest messages. On Gemini's free tier, Google may use content to improve its products.
-- **Reads outside its own data:** `profile.yaml` for the display name, built-in memory notes, session history, thread and profile lists.
+- **Reads outside its own data:** `profile.yaml` for the display name, built-in memory notes, session history, thread and profile lists, and paired device grants when the phone plugin is installed.
+- **iPhone tools:** with `hermes-mobile-device-access` and a paired iPhone, the voice can call that plugin's alarm, timer and reminder tools directly, without a Hermes turn. Only those eight tools are allowed, each is offered only when the device's grant covers it, and the bridge checks the grant again. Alarm and reminder details reach Gemini as tool results. `phone_tools` turns this off.
 - **Shell commands:** only with `readonly_shell` or `system_checks` on, both off by default, and only under the layers in the README.
 - **Credentials:** read through `agent.secret_scope`; the browser never receives the key.
 - **Approvals:** Hermes decides what needs asking. The plugin shows the request and passes on the user's answer through `approval.respond`, one time only. The voice model has no way to answer. The opt-in `voice_approval` setting accepts the user's own spoken approve or deny, matched on the microphone transcript and ignored while the voice speaks.
