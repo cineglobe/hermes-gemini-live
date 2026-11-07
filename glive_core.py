@@ -33,7 +33,7 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "gemini-live"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 API_ROOT = "https://generativelanguage.googleapis.com"
 # Ephemeral tokens are minted on v1beta and spent on the v1alpha *Constrained* socket (verified).

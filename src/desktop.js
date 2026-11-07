@@ -115,6 +115,32 @@ async function chatContext() {
   return { chat_title: (row && row.title) || '', recent }
 }
 
+// ── working with AirPods Approvals ─────────────────────────────────────────────────────────────
+// Plugins talk through window events. This one says which Hermes session a call is handling and
+// whether the voice is speaking (`hermes:voice-call`), so AirPods Approvals stays quiet on that
+// session and opens only its nod-or-shake window once the voice has asked. It reports answers back
+// with `hermes:approval-answered`, and whether gestures are available with `hermes:airpods-gestures`.
+
+let gesturesReady = false
+let callSaid = ''
+
+function publishCall(snapshot) {
+  const active = snapshot.phase === 'live' || snapshot.phase === 'reconnecting'
+  const d = snapshot.delegation
+  const detail = {
+    source: 'gemini-live',
+    active,
+    sessionId: active && d && d.status === 'working' ? d.sessionId : null,
+    speaking: active && Boolean(snapshot.modelSpeaking)
+  }
+  const key = JSON.stringify(detail)
+  if (key === callSaid) {
+    return
+  }
+  callSaid = key
+  window.dispatchEvent(new CustomEvent('hermes:voice-call', { detail }))
+}
+
 function getEngine() {
   if (engine) {
     return engine
@@ -136,13 +162,17 @@ function getEngine() {
       return voiceSessionId
     },
     chatContext,
+    gestures: () => gesturesReady,
     log: (level, message) => {
       if (level !== 'debug') {
         console.info(`[gemini-live] ${message}`)
       }
     }
   })
-  engine.subscribe(snapshot => $call.set(snapshot))
+  engine.subscribe(snapshot => {
+    $call.set(snapshot)
+    publishCall(snapshot)
+  })
 
   return engine
 }
@@ -759,6 +789,22 @@ export default {
         style.remove()
       }
     })
+
+    ctx.addEventListener(window, 'hermes:airpods-gestures', event => {
+      gesturesReady = Boolean(event.detail && event.detail.ready)
+    })
+    ctx.addEventListener(window, 'hermes:approval-answered', event => {
+      const detail = event.detail || {}
+      if (engine && detail.source === 'airpods-approvals') {
+        engine.gestureAnswered(detail.requestId, detail.choice)
+      }
+    })
+    ctx.addEventListener(window, 'hermes:voice-call-query', () => {
+      callSaid = ''
+      publishCall(engine ? engine.snapshot() : { phase: 'idle' })
+    })
+    window.dispatchEvent(new CustomEvent('hermes:airpods-gestures-query'))
+    ctx.onDispose(() => window.dispatchEvent(new CustomEvent('hermes:voice-call', { detail: { source: 'gemini-live', active: false, sessionId: null, speaking: false } })))
 
     ctx.onEvent('plugin.gemini-live.settings.changed', () => void refreshStatus())
     void refreshStatus()

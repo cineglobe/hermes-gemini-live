@@ -1,5 +1,5 @@
 name: gemini-live
-version: 1.1.0
+version: 1.2.0
 manifest_version: 2
 api_version: 1
 description: "Full-duplex Gemini Live voice calls for Hermes: talk to your agent, delegate work, monitor and steer threads and bot chats, recall memory. Bring your own Gemini API key."

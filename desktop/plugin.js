@@ -89,7 +89,7 @@ const GL_DENY = /^\W*(?:no,?\s+)?(?:deny|denied|reject)(?:\s+(?:it|that))?\W*$/i
 function glNoticeShown(text) {
   return text
     .replace(/\[Hermes update\]\s*/g, '')
-    .replace(/\s*(?:Tell the user what that says, and only that\. Say something was done only if it says so\. If it asks a question, ask the user, then send their reply with ask_hermes, where last_task\.|Acknowledge it in a few words\.|Say so briefly if the user is still deciding\.|Say in one plain sentence what it wants to do[^\n]*)/g, '')
+    .replace(/\s*(?:Tell the user what that says, and only that\. Say something was done only if it says so\. If it asks a question, ask the user, then send their reply with ask_hermes, where last_task\.|Acknowledge it in a few words\.|Acknowledge it in a word or two[^\n]*|Ask it as one short, plain question[^\n]*|Say so briefly if the user is still deciding\.|Say in one plain sentence what it wants to do[^\n]*)/g, '')
 }
 
 const GL_APPROVAL_WORDS = /\b(?:approv\w*|den(?:y|ies|ied)|reject\w*|allow\w*|go ahead|yes|confirm\w*)\b/i
@@ -1796,9 +1796,18 @@ function createGeminiLiveEngine(env) {
     const next = pending[0]
     if (!next) {
       if (d.approval) {
+        const gone = d.approval
         d.approval = null
+        d.lastApproval = gone
         emit()
-        queueNotice('[Hermes update] That approval request was answered elsewhere or timed out. Say so briefly if the user is still deciding.')
+        // AirPods Approvals reports a nod or shake just after Hermes takes it; give that a moment to
+        // arrive so the voice can say what happened instead of "answered elsewhere".
+        window.setTimeout(() => {
+          if (!gone.settled) {
+            gone.settled = true
+            queueNotice('[Hermes update] That approval request was answered elsewhere or timed out. Say so briefly if the user is still deciding.')
+          }
+        }, 1500)
       }
       return
     }
@@ -1808,8 +1817,13 @@ function createGeminiLiveEngine(env) {
     const action = glClip(next.command || next.description || 'a protected action', 200)
     d.approval = { id: next.request_id, action, reason: glClip(next.description || '', 200), after: state.transcript.length }
     emit()
-    const how = voiceApproval ? 'They can say approve or deny, or use the buttons on screen.' : 'They must press Approve or Deny on screen.'
-    queueNotice(`[Hermes update] ${state.agentName} needs the user's approval before it can do this: ${action}. Say in one plain sentence what it wants to do and ask them to decide. ${how} You cannot approve it yourself.`)
+    const gestures = Boolean(env.gestures && env.gestures())
+    const ways = [gestures && 'nod to approve or shake their head to deny', voiceApproval && 'say approve or deny', 'use the buttons on screen'].filter(Boolean)
+    const how = `They can ${ways.length > 1 ? `${ways.slice(0, -1).join(', ')} or ${ways[ways.length - 1]}` : ways[0]}.`
+    const ask = gestures
+      ? "Ask it as one short, plain question, as if it's yours to do, like \"Can I clear out the old build folder?\" Assume they know what the task is for. Then say they can nod or shake."
+      : 'Say in one plain sentence what it wants to do and ask them to decide.'
+    queueNotice(`[Hermes update] ${state.agentName} needs the user's approval before it can do this: ${action}. ${ask} ${how} You cannot approve it yourself.`)
   }
 
   async function answerApproval(choice) {
@@ -1819,6 +1833,7 @@ function createGeminiLiveEngine(env) {
       return
     }
     const approved = choice === 'once'
+    asked.settled = true
     d.approval = null
     emit()
     finishActivity(addActivity('approval', approved ? 'Approved' : 'Denied', 'running', asked.action), 'done', asked.action)
@@ -1828,6 +1843,28 @@ function createGeminiLiveEngine(env) {
     } catch (error) {
       addTranscript('system', `Could not send that approval: ${glClip((error && error.message) || String(error), 160)}`, true)
     }
+  }
+
+  // AirPods Approvals answered with a nod or shake and Hermes has already taken it: only update the
+  // call and let the voice acknowledge it. This sends nothing to Hermes.
+  function gestureAnswered(requestId, choice) {
+    const d = state.delegation
+    if (!d || !requestId) {
+      return
+    }
+    const asked = [d.approval, d.lastApproval].find(a => a && a.id === requestId)
+    if (!asked || asked.settled) {
+      return
+    }
+    asked.settled = true
+    if (d.approval === asked) {
+      d.approval = null
+      d.lastApproval = asked
+    }
+    emit()
+    const approved = choice === 'once'
+    finishActivity(addActivity('approval', approved ? 'Approved' : 'Denied', 'running', asked.action), 'done', asked.action)
+    queueNotice(`[Hermes update] The user ${approved ? 'nodded to approve' : 'shook their head to deny'} that request, and ${state.agentName} has it. Acknowledge it in a word or two, like "Approved."`)
   }
 
   // Judges the user's line as heard: by the time the timer fires the voice may have replied, and
@@ -2588,7 +2625,8 @@ function createGeminiLiveEngine(env) {
     visual,
     cancelHermes: () => CLIENT_TOOLS.cancel_hermes(),
     answerApproval,
-    _test: { syncApproval, listenForApproval, handleFrame, runTool, CLIENT_TOOLS, threadIndex, state, queueNotice, flushNotices, finishDelegation }
+    gestureAnswered,
+    _test: { syncApproval, gestureAnswered, listenForApproval, handleFrame, runTool, CLIENT_TOOLS, threadIndex, state, queueNotice, flushNotices, finishDelegation }
   }
 }
 
@@ -2681,6 +2719,32 @@ async function chatContext() {
   return { chat_title: (row && row.title) || '', recent }
 }
 
+// ── working with AirPods Approvals ─────────────────────────────────────────────────────────────
+// Plugins talk through window events. This one says which Hermes session a call is handling and
+// whether the voice is speaking (`hermes:voice-call`), so AirPods Approvals stays quiet on that
+// session and opens only its nod-or-shake window once the voice has asked. It reports answers back
+// with `hermes:approval-answered`, and whether gestures are available with `hermes:airpods-gestures`.
+
+let gesturesReady = false
+let callSaid = ''
+
+function publishCall(snapshot) {
+  const active = snapshot.phase === 'live' || snapshot.phase === 'reconnecting'
+  const d = snapshot.delegation
+  const detail = {
+    source: 'gemini-live',
+    active,
+    sessionId: active && d && d.status === 'working' ? d.sessionId : null,
+    speaking: active && Boolean(snapshot.modelSpeaking)
+  }
+  const key = JSON.stringify(detail)
+  if (key === callSaid) {
+    return
+  }
+  callSaid = key
+  window.dispatchEvent(new CustomEvent('hermes:voice-call', { detail }))
+}
+
 function getEngine() {
   if (engine) {
     return engine
@@ -2702,13 +2766,17 @@ function getEngine() {
       return voiceSessionId
     },
     chatContext,
+    gestures: () => gesturesReady,
     log: (level, message) => {
       if (level !== 'debug') {
         console.info(`[gemini-live] ${message}`)
       }
     }
   })
-  engine.subscribe(snapshot => $call.set(snapshot))
+  engine.subscribe(snapshot => {
+    $call.set(snapshot)
+    publishCall(snapshot)
+  })
 
   return engine
 }
@@ -3325,6 +3393,22 @@ export default {
         style.remove()
       }
     })
+
+    ctx.addEventListener(window, 'hermes:airpods-gestures', event => {
+      gesturesReady = Boolean(event.detail && event.detail.ready)
+    })
+    ctx.addEventListener(window, 'hermes:approval-answered', event => {
+      const detail = event.detail || {}
+      if (engine && detail.source === 'airpods-approvals') {
+        engine.gestureAnswered(detail.requestId, detail.choice)
+      }
+    })
+    ctx.addEventListener(window, 'hermes:voice-call-query', () => {
+      callSaid = ''
+      publishCall(engine ? engine.snapshot() : { phase: 'idle' })
+    })
+    window.dispatchEvent(new CustomEvent('hermes:airpods-gestures-query'))
+    ctx.onDispose(() => window.dispatchEvent(new CustomEvent('hermes:voice-call', { detail: { source: 'gemini-live', active: false, sessionId: null, speaking: false } })))
 
     ctx.onEvent('plugin.gemini-live.settings.changed', () => void refreshStatus())
     void refreshStatus()

@@ -118,6 +118,7 @@ function makeEngine({ script = {}, gateway = fakeGateway(), restCalls = [], agen
     rpc: gateway.rpc,
     onEvent: gateway.onEvent,
     focus: () => ({ sessionId: 'live-1' }),
+    gestures: () => Boolean(engine && engine._env_gestures),
     submitToChat: (sid, text) => (composer.push({ sid, text }), true),
     chatContext: async () => ({ chat_title: 'Fix the build', recent: [] })
   })
@@ -671,9 +672,57 @@ test('an approval is spoken and only the user can answer it', async () => {
   await t.engine.stop()
 })
 
+test('with AirPods Approvals, the voice offers nod or shake and hears a gesture answer', async () => {
+  const gateway = fakeGateway()
+  const t = makeEngine({ gateway })
+  t.engine._env_gestures = true
+  await t.engine.start({})
+  await tick(5)
+  const { state, syncApproval, gestureAnswered, flushNotices } = t.engine._test
+  state.delegation = { id: 'd1', sessionId: 's1', status: 'working', request: 'clean up', toolCount: 0 }
+  syncApproval([{ request_id: 'a1', command: 'rm -rf ./build', description: 'recursive delete' }])
+  const noticeText = () => t.sockets().flatMap(s => s.sent).map(f => JSON.stringify(f)).join(' ')
+  flushNotices && flushNotices()
+  await tick(20)
+  assert.match(noticeText(), /nod to approve or shake their head to deny/)
+  assert.match(noticeText(), /Can I clear out the old build folder/)
+  // Hermes takes the nod (the approval disappears), then AirPods Approvals reports it.
+  syncApproval([])
+  gestureAnswered('a1', 'once')
+  await new Promise(r => setTimeout(r, 1700))
+  flushNotices && flushNotices()
+  await tick(20)
+  assert.match(noticeText(), /nodded to approve/)
+  assert.doesNotMatch(noticeText(), /answered elsewhere/)
+  assert.equal(gateway.calls.filter(c => c.method === 'approval.respond').length, 0, 'the call never answers for it')
+  assert.ok(state.activity.some(a => a.label === 'Approved'))
+  await t.engine.stop()
+})
+
+test('without a gesture report, a vanished approval is still called answered elsewhere', async () => {
+  const gateway = fakeGateway()
+  const t = makeEngine({ gateway })
+  await t.engine.start({})
+  await tick(5)
+  const { state, syncApproval, flushNotices } = t.engine._test
+  state.delegation = { id: 'd1', sessionId: 's1', status: 'working', request: 'clean up', toolCount: 0 }
+  syncApproval([{ request_id: 'a1', command: 'rm -rf ./build' }])
+  const noticeText = () => t.sockets().flatMap(s => s.sent).map(f => JSON.stringify(f)).join(' ')
+  await tick(20)
+  assert.doesNotMatch(noticeText(), /nod/)
+  syncApproval([])
+  await new Promise(r => setTimeout(r, 1700))
+  flushNotices && flushNotices()
+  await tick(20)
+  assert.match(noticeText(), /answered elsewhere/)
+  await t.engine.stop()
+})
+
 test('notices show the news, not the instructions for the voice', () => {
   const { glNoticeShown } = loadEngine()
   assert.equal(glNoticeShown('[Hermes update] The user approved that request. Acknowledge it in a few words.'), 'The user approved that request.')
+  assert.equal(glNoticeShown('[Hermes update] The user nodded to approve that request, and Hermes has it. Acknowledge it in a word or two, like "Approved."'), 'The user nodded to approve that request, and Hermes has it.')
+  assert.equal(glNoticeShown("[Hermes update] Hermes needs the user's approval before it can do this: rm x. Ask it as one short, plain question, as if it's yours to do. Then say they can nod or shake. They can nod."), "Hermes needs the user's approval before it can do this: rm x.")
   assert.equal(glNoticeShown("[Hermes update] Hermes needs the user's approval before it can do this: rm x. Say in one plain sentence what it wants to do and ask them to decide. You cannot approve it yourself."), "Hermes needs the user's approval before it can do this: rm x.")
   assert.equal(glNoticeShown('[Hermes update] About your request “x”: Hermes replied: What should it say? Tell the user what that says, and only that. Say something was done only if it says so. If it asks a question, ask the user, then send their reply with ask_hermes, where last_task.'), 'About your request “x”: Hermes replied: What should it say?')
 })

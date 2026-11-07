@@ -39,6 +39,8 @@ The voice decides where each task runs. Work related to the chat you started the
 
 When a job needs permission, the voice tells you what it wants to do and Approve and Deny buttons appear on the call. Hermes' approval system still decides what needs asking, and the voice model has no way to answer. Turn on `voice_approval` to answer hands-free by saying "approve" or "deny": the plugin matches your whole utterance on the microphone transcript, ignores it while the voice is speaking, and approves once only. Use headphones with it.
 
+With the AirPods Approvals plugin installed, you can also nod to approve or shake your head to deny. The voice asks the question, AirPods Approvals stays quiet and only listens for the gesture, and the voice confirms the answer. Hermes still gets each answer once, from whichever way you gave it.
+
 ## Read-only commands
 
 `run_readonly` lets the voice answer "is the backup container up?" or "what do the last log lines
