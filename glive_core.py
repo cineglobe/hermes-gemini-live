@@ -33,7 +33,7 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "gemini-live"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 API_ROOT = "https://generativelanguage.googleapis.com"
 # Ephemeral tokens are minted on v1beta and spent on the v1alpha *Constrained* socket (verified).
@@ -319,13 +319,18 @@ _PHONE_WAIT_SECONDS = 12
 _PHONE_HIDDEN = {"current_access", "access_note", "profile", "device_id", "wake_status", "followup"}
 
 
+_PHONE_NOT_LOADED = "The phone plugin (hermes-mobile-device-access) is not loaded in this Hermes."
+
+
 def _phone_registry() -> Any:
-    """Hermes' tool registry when the phone plugin's tools are in it, else None."""
+    """Hermes' tool registry when the phone plugin has registered its tools there, else None.
+    Only looks; loading other plugins is Hermes' job, never this plugin's."""
     try:
-        from hermes_cli.plugins import discover_plugins
         from tools.registry import registry
-        if registry.get_entry("mobile_alarm_create") is None:
-            discover_plugins()
+    except Exception as exc:
+        logger.debug("gemini-live: tool registry unavailable (%s)", type(exc).__name__)
+        return None
+    try:
         return registry if registry.get_entry("mobile_alarm_create") is not None else None
     except Exception as exc:
         logger.debug("gemini-live: phone tools unavailable (%s)", type(exc).__name__)
@@ -366,7 +371,7 @@ def run_phone_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "Direct phone tools are turned off."}
     registry = _phone_registry()
     if registry is None:
-        return {"error": "No phone is available to this profile."}
+        return {"error": _PHONE_NOT_LOADED}
     call = {k: v for k, v in args.items() if k in (spec.get("properties") or {}) and v not in (None, "")}
     if name == "mobile_reminders_list":
         call["limit"] = max(1, min(int(call.get("limit") or 10), 20))
@@ -892,7 +897,7 @@ def run_readonly(args: dict[str, Any], context: Optional[dict[str, Any]] = None)
         transcript += f"\n(The assistant says the user wants: {why})"
     result = _shell().run_readonly(
         str(args.get("command") or ""), transcript, enabled=bool(settings.get("readonly_shell", False)),
-        key=key, model=model, cwd=_workspace_cwd(), request=_google_request)
+        key=key, model=model, cwd=_workspace_cwd(), request=_google_request, hermes_home=str(_home()))
     logger.info("gemini-live: run_readonly %r -> %s", str(args.get("command") or "")[:120],
                 "refused (" + result.get("layer", "") + ")" if result.get("refused") else "ran")
     return result

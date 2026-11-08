@@ -4,7 +4,9 @@ A command runs only if EVERY layer agrees; each layer can refuse, none can widen
 
 1. Hard rules (this file, deterministic): an allow-list of programs and sub-commands, argument
    rules per program, no shell syntax at all (no pipes, redirects, chaining, substitution,
-   globs), and a deny-list of secret paths resolved through symlinks.
+   globs). Paths, resolved through symlinks, must sit inside an allow-listed root (the workspace
+   folder, /var/log, a few plain system files) and never in a dot-file or dot-directory, the
+   Hermes home, or a known secret name.
 2. A reviewer model (Gemini Flash-Lite by default, the user's own key) that sees the command and
    the recent call transcript, so it can refuse a command that is risky or is not what the user
    asked for. It can only refuse; a failed or unclear review refuses (fail closed).
@@ -49,22 +51,75 @@ _SECRET_PREFIXES = ("/root", "/var/lib/docker", "/var/lib/private", "/home/.ecry
 # only these plain system facts are readable there; anything else under /etc is refused.
 _ETC_READABLE = {"/etc/hostname", "/etc/hosts", "/etc/os-release", "/etc/lsb-release", "/etc/timezone",
                  "/etc/debian_version", "/etc/issue", "/etc/resolv.conf", "/etc/fstab", "/etc/machine-id"}
+_PROC_READABLE = {"/proc/meminfo", "/proc/loadavg", "/proc/uptime", "/proc/cpuinfo", "/proc/version"}
 _PROC_SECRET = re.compile(r"^/proc/[^/]+/(environ|cmdline|mem|maps|fd)")
+# Readable roots. A path must resolve inside one of these (or be one of the plain files above); a
+# deny-list alone misses credential stores nobody thought to name.
+_LOG_ROOTS = ("/var/log",)
 
 
-def _is_secret_path(raw: str, cwd: Path) -> bool:
+def _resolve(raw: str, base: Path) -> Optional[Path]:
     try:
-        resolved = (cwd / os.path.expanduser(raw)).resolve()
+        return (base / os.path.expanduser(raw)).resolve()
     except (OSError, RuntimeError):
-        return True
-    text = str(resolved)
-    if text == "/private/etc" or text.startswith("/private/etc/"):  # macOS: /etc is a symlink to here
-        text = text[len("/private"):]
+        return None
+
+
+def _within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _plain(path: Path) -> str:
+    text = str(path)
+    for alias in ("/private/etc", "/private/var"):  # macOS: /etc and /var are symlinks into /private
+        if text == alias or text.startswith(alias + "/"):
+            return text[len("/private"):]
+    return text
+
+
+def default_hermes_home() -> Path:
+    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+
+
+def workspace_root(cwd: Optional[Path]) -> Optional[Path]:
+    """The configured workspace, if it is a real, specific folder (never / or a top-level one)."""
+    if cwd is None:
+        return None
+    root = _resolve(str(cwd), Path("/"))
+    shallow = min(len(Path(os.path.abspath(os.path.expanduser(str(cwd)))).parts), len(Path(_plain(root or Path("/"))).parts))
+    if root is None or not root.is_dir() or shallow < 3:
+        return None
+    return root
+
+
+def path_refusal(raw: str, cwd: Optional[Path], hermes_home: Optional[Path] = None) -> Optional[str]:
+    """Why ``raw`` may not be read, or None. Allowed: inside the workspace, /var/log, or a plain
+    system file. Refused everywhere: dot-files and dot-directories (so every credential store and
+    shell history under the home directory), the whole Hermes home, and known secret names."""
+    root = workspace_root(cwd)
+    resolved = _resolve(raw, root or Path("/"))
+    if resolved is None:
+        return f"{raw} could not be resolved"
+    text = _plain(resolved)
+    secret = f"{raw} looks like a secret or private file"
+    homes = {resolved_home for h in (hermes_home or default_hermes_home(), Path.home() / ".hermes")
+             if (resolved_home := _resolve(str(h), Path("/"))) is not None}
+    if any(part.startswith(".") for part in Path(text).parts[1:]) or any(_within(resolved, h) for h in homes):
+        return secret
     if _PROC_SECRET.match(text) or any(text == p or text.startswith(p + "/") for p in _SECRET_PREFIXES):
-        return True
+        return secret
     if (text == "/etc" or text.startswith("/etc/")) and text not in _ETC_READABLE:
-        return True
-    return bool(_SECRET_PARTS.search(text) or _SECRET_PARTS.search(raw))
+        return secret
+    if _SECRET_PARTS.search(text) or _SECRET_PARTS.search(raw):
+        return secret
+    if text in _ETC_READABLE or text in _PROC_READABLE:
+        return None
+    if root is not None and _within(resolved, root):
+        return None
+    if any(text == r or text.startswith(r + "/") for r in _LOG_ROOTS):
+        return None
+    where = "the workspace folder, /var/log" if root is not None else "/var/log (no workspace folder is set)"
+    return f"{raw} is outside what this tool may read: {where} and a few plain system files"
 
 
 def _paths(args: list[str]) -> list[str]:
@@ -199,7 +254,13 @@ _COMPOSE_READ = {"ps", "ls", "images", "logs", "top", "version"}
 _DENY_TOKENS = {"inspect", "exec", "env", "printenv", "config", "show-environment", "cat-file"}
 
 
-def check_command(command: str, cwd: Path) -> tuple[Optional[list[str]], str]:
+# Programs that read the current folder when given no path.
+_DEFAULTS_TO_CWD = {"ls", "du", "find"}
+_PATH_CHECKED = {"cat", "head", "tail", "grep", "ls", "stat", "file", "wc", "du", "find"}
+
+
+def check_command(command: str, cwd: Optional[Path],
+                  hermes_home: Optional[Path] = None) -> tuple[Optional[list[str]], str]:
     """Layer 1. Returns (argv, "") when allowed, else (None, reason)."""
     cmd = str(command or "").strip()
     if not cmd:
@@ -229,10 +290,14 @@ def check_command(command: str, cwd: Path) -> tuple[Optional[list[str]], str]:
     err = rule(args)
     if err:
         return None, err
-    if prog in {"cat", "head", "tail", "grep", "ls", "stat", "file", "wc", "du", "find", "df"}:
-        for raw in path_args(prog, args):
-            if _is_secret_path(raw, cwd):
-                return None, f"{raw} looks like a secret or private file"
+    if prog in _PATH_CHECKED:
+        paths = path_args(prog, args)
+        if not paths and prog in _DEFAULTS_TO_CWD:
+            paths = ["."]
+        for raw in paths:
+            why = path_refusal(raw, cwd, hermes_home)
+            if why:
+                return None, why
     if prog == "find" and any(_SECRET_PARTS.search(a) for a in args):
         return None, "that search targets secret files"
     if shutil.which(prog) is None:
@@ -351,11 +416,13 @@ def execute(argv: list[str], cwd: Path) -> dict[str, Any]:
 
 
 def run_readonly(command: str, transcript: str, *, enabled: bool, key: str, model: str, cwd: Optional[str],
-                 request: Callable[[str, str, Optional[dict]], dict]) -> dict[str, Any]:
+                 request: Callable[[str, str, Optional[dict]], dict],
+                 hermes_home: Optional[str] = None) -> dict[str, Any]:
     if not enabled:
         return {"error": "Read-only commands are turned off in the Gemini Live settings."}
-    where = Path(cwd) if cwd and Path(cwd).is_dir() else Path.home()
-    argv, why = check_command(command, where)
+    root = workspace_root(Path(cwd)) if cwd else None
+    where = root or Path("/")
+    argv, why = check_command(command, root, Path(hermes_home) if hermes_home else None)
     if argv is None:
         return {"refused": True, "layer": "rules", "reason": why}
     if not key:

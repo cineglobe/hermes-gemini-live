@@ -50,9 +50,12 @@ say?" directly. A command runs only if **every** layer agrees, and each layer ca
    `ls`, `cat`/`head`/`tail`, non-recursive `grep`, bounded `find`, `git status/log/diff`,
    `docker ps/logs`, `systemctl status`, `journalctl`, `ss`, `ip`, `tailscale status`…). No shell
    syntax at all (pipes, redirects, chaining, `$`, backticks), no `sudo`, no `env`, no interpreters,
-   no `-exec`/`-delete`, no `docker inspect/exec`. Secret paths (`.env`, `~/.ssh`, keys, tokens,
-   `auth.json`, `/proc/*/environ`, and everything under `/etc` except a few plain system files
-   such as `hostname` and `os-release`) are refused, resolved through symlinks.
+   no `-exec`/`-delete`, no `docker inspect/exec`. File paths, resolved through symlinks, must
+   sit inside an allow-listed root: the workspace folder set in `terminal.cwd`, `/var/log`, and a
+   few plain system files such as `/etc/hostname`, `/etc/os-release` and `/proc/meminfo`. Without
+   a workspace folder only `/var/log` and those files are readable. Dot-files and dot-directories
+   (so `~/.config`, `~/.ssh`, shell history and `.env`), the whole Hermes home and known secret
+   names are refused even inside those roots.
 2. **Safety review.** A Gemini model (default `gemini-3.5-flash-lite`, your key) sees the command
    *and the recent call transcript*, so it can refuse something risky or something you did not
    actually ask for. Server safety comes first. Transcript text is treated as data, so a

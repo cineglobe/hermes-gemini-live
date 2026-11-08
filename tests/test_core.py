@@ -222,6 +222,35 @@ def test_phone_tools_follow_the_grants_on_the_phone(home, core, monkeypatch):
     assert {"name": "mobile_alarm_create", "where": "server"} in routes
 
 
+def test_phone_tools_come_from_the_registry_only(core, monkeypatch):
+    import sys
+    import types
+
+    class Registry:
+        def __init__(self, entries):
+            self.entries = entries
+
+        def get_entry(self, name):
+            return self.entries.get(name)
+
+    loaded = []
+    plugins = types.ModuleType("hermes_cli.plugins")
+    plugins.discover_plugins = lambda: loaded.append(True)
+    monkeypatch.setitem(sys.modules, "hermes_cli.plugins", plugins)
+    tools_pkg = types.ModuleType("tools")
+    registry_mod = types.ModuleType("tools.registry")
+    monkeypatch.setitem(sys.modules, "tools", tools_pkg)
+    monkeypatch.setitem(sys.modules, "tools.registry", registry_mod)
+
+    registry_mod.registry = Registry({})
+    assert core._phone_registry() is None
+    assert core.run_phone_tool("mobile_alarm_create", {"time": "07:00"}) == {"error": core._PHONE_NOT_LOADED}
+    assert "not loaded" in core._PHONE_NOT_LOADED
+    registry_mod.registry = Registry({"mobile_alarm_create": object()})
+    assert core._phone_registry() is registry_mod.registry
+    assert loaded == []  # never loads other plugins itself
+
+
 def test_phone_tool_calls_are_limited_and_honest(home, core, monkeypatch):
     phone = _FakePhone()
     monkeypatch.setattr(core, "_phone_registry", lambda: phone)

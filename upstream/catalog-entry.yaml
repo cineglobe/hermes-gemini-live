@@ -9,8 +9,8 @@ description: >-
   past conversations, set and read iPhone alarms, timers and reminders through
   hermes-mobile-device-access when a phone is paired, and report back when work finishes. Read-only
   local commands need three
-  layers to agree: hard rules, a safety review and a contained run. Secret files are refused on
-  every route. When a job needs approval, the voice says so and Approve and Deny buttons appear;
+  layers to agree: hard rules, a safety review and a contained run; files are read only from the
+  workspace folder, /var/log and a few plain system files. When a job needs approval, the voice says so and Approve and Deny buttons appear;
   the voice model can never answer one, and spoken approval is opt-in. Disclosure — pressing Start captures microphone audio and streams it from the
   client to generativelanguage.googleapis.com on a single-use ephemeral token; the Gemini key stays
   on the Hermes backend, read through Hermes' secret scope. Gemini also receives the voice's
@@ -26,7 +26,7 @@ tier: community
 category: voice
 requires_hermes: ">=0.22.5"
 docs_url: https://github.com/cineglobe/hermes-gemini-live#readme
-version: "1.2.0"
+version: "1.2.1"
 image: https://raw.githubusercontent.com/cineglobe/hermes-gemini-live/<sha>/docs/assets/banner.png
 screenshots:
   - https://raw.githubusercontent.com/cineglobe/hermes-gemini-live/<sha>/docs/assets/approval.png
