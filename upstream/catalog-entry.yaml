@@ -11,7 +11,8 @@ description: >-
   local commands need three
   layers to agree: hard rules, a safety review and a contained run; files are read only from the
   workspace folder, /var/log and a few plain system files. When a job needs approval, the voice says so and Approve and Deny buttons appear;
-  the voice model can never answer one, and spoken approval is opt-in. Disclosure — pressing Start captures microphone audio and streams it from the
+  the voice model can never answer one, and spoken approval is opt-in. With the AirPods
+  Approvals plugin, a nod or shake answers it too. Disclosure — pressing Start captures microphone audio and streams it from the
   client to generativelanguage.googleapis.com on a single-use ephemeral token; the Gemini key stays
   on the Hermes backend, read through Hermes' secret scope. Gemini also receives the voice's
   instructions, tool results, and, unless share_chat_context is off, the open chat's title and
